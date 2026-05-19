@@ -142,12 +142,12 @@ class TRTLLMMHAAttnBackend(AttentionBackend):
 
         # Separate slots for prefill-kernel vs decode-kernel forward paths.
         # forward_extend reads prefill; forward_decode reads decode.
-        # forward_mixed_metadata holds the full-batch ragged metadata for
-        # MIXED mode (prefill rows + decode rows as q_len=1), read by
-        # _forward_mixed_context_kernel.
+        # MIXED steps also write to forward_prefill_metadata — the metadata is
+        # ragged (cu_seqlens_q has extend lengths for prefill rows and 1 for
+        # decode rows), and the context kernel handles it natively, so MIXED
+        # is just EXTEND with mixed q lengths from forward_extend's view.
         self.forward_prefill_metadata: TRTLLMMHAMetadata | None = None
         self.forward_decode_metadata: TRTLLMMHAMetadata | None = None
-        self.forward_mixed_metadata: TRTLLMMHAMetadata | None = None
 
         # CUDA graph state — per-slot dicts.
         self.cuda_graph_prefill_metadata: dict[int, TRTLLMMHAMetadata] = {}
@@ -304,23 +304,11 @@ class TRTLLMMHAAttnBackend(AttentionBackend):
         save_kv_cache: bool = True,
         **kwargs,
     ) -> torch.Tensor:
-        if self.forward_mixed_metadata is not None:
-            # MIXED: prefill rows and decode rows in the same step. Feed the
-            # whole batch through trtllm_batch_context_with_kv_cache;
-            # cu_seqlens_q describes the ragged q layout (extend lengths for
-            # prefill rows, 1 for decode rows). _init_mixed_metadata built the
-            # ragged metadata.
-            return self._forward_mixed_context_kernel(
-                q,
-                k,
-                v,
-                layer,
-                out_cache_loc,
-                token_to_kv_pool,
-                save_kv_cache=save_kv_cache,
-                **kwargs,
-            )
-
+        # MIXED steps go through here too: _init_mixed_metadata writes the
+        # ragged full-batch metadata (cu_seqlens_q = extend lens for prefill
+        # rows + 1 for decode rows; cu_seqlens_k = post-write KV totals) into
+        # the same forward_prefill_metadata slot, and the context kernel
+        # handles ragged q natively. No MIXED-specific dispatch needed.
         q = self._save_kv_and_prepare_q(
             q, k, v, layer, out_cache_loc, token_to_kv_pool, save_kv_cache
         )
@@ -351,57 +339,6 @@ class TRTLLMMHAAttnBackend(AttentionBackend):
         )
         return o.view(-1, layer.tp_q_head_num * layer.head_dim)
 
-    def _forward_mixed_context_kernel(
-        self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        layer: PagedAttention,
-        out_cache_loc: torch.Tensor,
-        token_to_kv_pool,
-        save_kv_cache: bool = True,
-        **kwargs,
-    ) -> torch.Tensor:
-        """MIXED forward: feed the whole batch (prefill rows + decode rows
-        treated as q_len=1) into a single ``trtllm_batch_context_with_kv_cache``
-        call. ``_init_mixed_metadata`` populated ``forward_mixed_metadata``
-        with the full-batch ragged ``cu_seqlens_q/k`` and ``page_table``.
-        """
-        mixed_meta = self.forward_mixed_metadata
-        assert mixed_meta is not None, (
-            "forward_mixed_metadata must be set by _init_mixed_metadata before "
-            "_forward_mixed_context_kernel is called"
-        )
-
-        q = self._save_kv_and_prepare_q(
-            q, k, v, layer, out_cache_loc, token_to_kv_pool, save_kv_cache
-        )
-        k_cache, v_cache = self._get_kv_cache_permuted(layer, token_to_kv_pool)
-        bmm1_scale, bmm2_scale = self._compute_scales(layer)
-
-        attention_sink = kwargs.get("sinks", None)
-        if attention_sink is not None:
-            attention_sink = attention_sink.float()
-
-        o = trtllm_batch_context_with_kv_cache(
-            query=q,
-            kv_cache=(k_cache, v_cache),
-            workspace_buffer=self.workspace_buffer,
-            block_tables=mixed_meta.page_table,
-            seq_lens=mixed_meta.cache_seqlens_int32,
-            max_q_len=mixed_meta.max_seq_len_q,
-            max_kv_len=self.max_context_len,
-            bmm1_scale=bmm1_scale,
-            bmm2_scale=bmm2_scale,
-            batch_size=mixed_meta.cu_seqlens_q.shape[0] - 1,
-            cum_seq_lens_q=mixed_meta.cu_seqlens_q,
-            cum_seq_lens_kv=mixed_meta.cu_seqlens_k,
-            window_left=layer.sliding_window_size,
-            sinks=attention_sink,
-            out_dtype=self.dtype,
-        )
-        return o.view(-1, layer.tp_q_head_num * layer.head_dim)
-
     # ------------------------------------------------------------------
     # Metadata initialisation
     # ------------------------------------------------------------------
@@ -422,12 +359,6 @@ class TRTLLMMHAAttnBackend(AttentionBackend):
         use_cuda_graph: bool = False,
         **kwargs,
     ):
-        # Reset the MIXED sentinel; only _init_mixed_metadata sets it. Without
-        # this reset, a non-MIXED step after a MIXED step would still have a
-        # stale forward_mixed_metadata, and forward_extend would mis-dispatch
-        # to _forward_mixed_split_kernel.
-        self.forward_mixed_metadata = None
-
         if forward_mode.is_mixed():
             # num_extends / extend_seq_lens come from cuda_graph_wrapper kwargs.
             num_extends = kwargs.get("num_extends")
@@ -594,13 +525,14 @@ class TRTLLMMHAAttnBackend(AttentionBackend):
         extend_seq_lens: torch.Tensor | None,
         extend_seq_lens_cpu: torch.Tensor | None,
     ):
-        """Populate forward_mixed_metadata for MIXED batches.
+        """Populate forward_prefill_metadata for MIXED batches.
 
         The batch has prefill rows in [0, num_extends) and decode rows in
         [num_extends, bs). Per-request query length is the extend length for
         prefill rows and 1 for decode rows. KV lengths come from seq_lens
-        (post-write totals) for the whole batch. _forward_mixed_context_kernel
-        feeds the full ragged batch through trtllm_batch_context_with_kv_cache.
+        (post-write totals) for the whole batch. forward_extend reads the
+        same prefill slot whether the step is EXTEND or MIXED — the context
+        kernel handles ragged q natively.
         """
         assert (
             seq_lens.dtype == torch.int32
@@ -628,17 +560,20 @@ class TRTLLMMHAAttnBackend(AttentionBackend):
             torch.cumsum(seq_lens[:bs], dim=0, dtype=torch.int32), (1, 0)
         )
 
-        # max_seq_len_q over the whole mixed batch. Decode rows are always 1,
-        # so this equals max of the prefill extend lengths (or 1 if there are
-        # no prefill tokens, which the assertion above excludes).
-        max_seq_len_q = int(extend_seq_lens_cpu[:num_extends].max().item())
+        # max_seq_len_q over the whole mixed batch. Decode rows contribute 1,
+        # prefill rows contribute extend_seq_lens — but if every prefill row
+        # is fully prefix-cached (extend length 0), the prefill max is 0 while
+        # decode rows still have q_len=1. Clamp to 1 so the kernel sees a
+        # consistent non-zero max_q_len for a non-empty query batch.
+        max_extend = int(extend_seq_lens_cpu[:num_extends].max().item())
+        max_seq_len_q = max(max_extend, 1)
 
         page_table = self._build_page_table(
             req_pool_indices, seq_lens, bs, req_to_page, self.page_table_buf
         )
         cache_seqlens_int32 = seq_lens[:bs]
 
-        self.forward_mixed_metadata = TRTLLMMHAMetadata(
+        self.forward_prefill_metadata = TRTLLMMHAMetadata(
             cache_seqlens_int32=cache_seqlens_int32,
             max_seq_len_q=max_seq_len_q,
             max_seq_len_k=self.max_context_len,
