@@ -391,17 +391,22 @@ class TRTLLMMHAAttnBackend(AttentionBackend):
         # Restored in finally so subsequent layers in the same step still see it.
         self.forward_mixed_metadata = None
         try:
-            o_ext = self.forward_extend(
-                q_ext,
-                k_ext,
-                v_ext,
-                layer,
-                loc_ext,
-                token_to_kv_pool,
-                bs=mixed_meta.num_prefill_reqs,
-                save_kv_cache=save_kv_cache,
-                **kwargs,
-            )
+            # When all prefill rows are fully prefix-cached, num_prefill_tokens
+            # is 0; q_ext is empty so there is no context-kernel work to do.
+            if n_pf > 0:
+                o_ext = self.forward_extend(
+                    q_ext,
+                    k_ext,
+                    v_ext,
+                    layer,
+                    loc_ext,
+                    token_to_kv_pool,
+                    bs=mixed_meta.num_prefill_reqs,
+                    save_kv_cache=save_kv_cache,
+                    **kwargs,
+                )
+            else:
+                o_ext = q_ext  # shape (0, hidden); pass through to the concat
             o_dec = self.forward_decode(
                 q_dec,
                 k_dec,
