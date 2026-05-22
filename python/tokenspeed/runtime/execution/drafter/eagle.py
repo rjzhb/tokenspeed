@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,13 @@ from tokenspeed.runtime.utils import get_colorful_logger
 from tokenspeed.runtime.utils.nvtx import nvtx_range
 
 logger = get_colorful_logger(__name__)
+
+# Env-var gate for the EAGLE draft first-step reduce optimization. Temporary —
+# set to 0 to disable the optimization and run the baseline catch-up path for
+# A/B perf comparison. Will be removed once stabilized.
+_DRAFT_REDUCE_FIRST_STEP_ENABLED = (
+    os.environ.get("TOKENSPEED_EAGLE_DRAFT_REDUCE", "1") == "1"
+)
 
 if TYPE_CHECKING:
     from tokenspeed.runtime.execution.input_buffer import InputBuffers
@@ -212,6 +220,14 @@ class Eagle(BaseDrafter):
             draft_input, bs, draft_input.input_num_tokens
         )
 
+        # Catch-up step with multi-token decode input: every position except
+        # the live one per request is purely a KV-cache write. The midlayer
+        # slices Q after KV write via ctx.gather_ids and runs attn/MLP/post-
+        # norms on just the [bs] live positions.
+        draft_reduce_to_last = (
+            forward_mode.is_decode() and _DRAFT_REDUCE_FIRST_STEP_ENABLED
+        )
+
         ctx = ForwardContext(
             attn_backend=self.attn_backend,
             token_to_kv_pool=self.token_to_kv_pool,
@@ -225,6 +241,7 @@ class Eagle(BaseDrafter):
             global_num_tokens=draft_input.global_num_tokens,
             global_bs=draft_input.global_bs,
             all_decode_or_idle=draft_input.all_decode_or_idle,
+            draft_reduce_to_last=draft_reduce_to_last,
         )
 
         return self.draft_model_runner.forward(

@@ -58,3 +58,8 @@ class ForwardContext:
 
     # --- logits processor ---
     gather_ids: torch.Tensor | None = None
+
+    # When True, the draft head's first step prunes attn/MLP/post-norms to the
+    # one live position per request using ctx.gather_ids. LogitsProcessor
+    # bypasses its own slicing (gather_ids set to None on LogitsMetadata).
+    draft_reduce_to_last: bool = False

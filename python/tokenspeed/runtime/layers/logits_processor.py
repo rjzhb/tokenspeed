@@ -111,10 +111,14 @@ class LogitsMetadata:
         ctx: ForwardContext,
         input_lengths: torch.Tensor,
     ):
+        # When the midlayer already pruned to one row per request (EAGLE draft
+        # first-step reduce), drop gather_ids so LogitsProcessor passes through
+        # instead of re-indexing.
+        gather_ids = None if ctx.draft_reduce_to_last else ctx.gather_ids
         return cls(
             forward_mode=ctx.forward_mode,
             capture_hidden_mode=ctx.capture_hidden_mode,
-            gather_ids=ctx.gather_ids,
+            gather_ids=gather_ids,
             extend_seq_lens=input_lengths,
         )
 
