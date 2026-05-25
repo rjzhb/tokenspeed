@@ -217,6 +217,11 @@ class LlamaAttention(nn.Module):
         else:
             q, k = self.rotary_emb(positions, q, k)
             attn_output = self.attn(q, k, v, ctx=ctx, out_cache_loc=out_cache_loc)
+            if ctx.draft_reduce_to_last:
+                # Non-prewrite backend: KV was written by self.attn above;
+                # slice attn_output to one row per request so o_proj and the
+                # rest of the layer only see the live positions.
+                attn_output = attn_output.index_select(0, ctx.gather_ids)
 
         output, _ = self.o_proj(attn_output)
         return output
