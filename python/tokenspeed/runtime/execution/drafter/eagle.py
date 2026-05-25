@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -37,17 +36,11 @@ from tokenspeed.runtime.execution.forward_batch_info import (
     CaptureHiddenMode,
     ForwardMode,
 )
+from tokenspeed.runtime.models.llama_eagle3 import LlamaForCausalLMEagle3
 from tokenspeed.runtime.utils import get_colorful_logger
 from tokenspeed.runtime.utils.nvtx import nvtx_range
 
 logger = get_colorful_logger(__name__)
-
-# Env-var gate for the EAGLE draft first-step reduce optimization. Temporary —
-# set to 0 to disable the optimization and run the baseline catch-up path for
-# A/B perf comparison. Will be removed once stabilized.
-_DRAFT_REDUCE_FIRST_STEP_ENABLED = (
-    os.environ.get("TOKENSPEED_EAGLE_DRAFT_REDUCE", "1") == "1"
-)
 
 if TYPE_CHECKING:
     from tokenspeed.runtime.execution.input_buffer import InputBuffers
@@ -223,9 +216,11 @@ class Eagle(BaseDrafter):
         # Catch-up step with multi-token decode input: every position except
         # the live one per request is purely a KV-cache write. The midlayer
         # slices Q after KV write via ctx.gather_ids and runs attn/MLP/post-
-        # norms on just the [bs] live positions.
-        draft_reduce_to_last = (
-            forward_mode.is_decode() and _DRAFT_REDUCE_FIRST_STEP_ENABLED
+        # norms on just the [bs] live positions. Only LlamaForCausalLMEagle3
+        # implements the midlayer slice today; MLA / NextN drafts fall back
+        # to the full path until a follow-up PR adds matching slice code.
+        draft_reduce_to_last = forward_mode.is_decode() and isinstance(
+            self.draft_model_runner.model, LlamaForCausalLMEagle3
         )
 
         ctx = ForwardContext(
