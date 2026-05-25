@@ -187,12 +187,8 @@ class LlamaAttention(nn.Module):
                 enable_pdl=pdl_enabled(),
             )
             if ctx.draft_reduce_to_last:
-                # KV cache for all bs*spec_num_tokens positions already written
-                # by fused_set_kv_buffer_arg above. Reduce Q to one query per
-                # request (live position) and route to decode kernel: bs queries
-                # against the full cache (which now includes the just-written
-                # spec_num_tokens new tokens per request). DRAFT_EXTEND init
-                # populates forward_decode_metadata precisely for this case.
+                # KV already written via fused_set_kv_buffer_arg above; slice Q
+                # to one query per request and route attn as decode.
                 q_rope = q_rope.index_select(0, ctx.gather_ids)
                 attn_output = ctx.attn_backend.forward(
                     q_rope,
@@ -218,9 +214,8 @@ class LlamaAttention(nn.Module):
             q, k = self.rotary_emb(positions, q, k)
             attn_output = self.attn(q, k, v, ctx=ctx, out_cache_loc=out_cache_loc)
             if ctx.draft_reduce_to_last:
-                # Non-prewrite backend: KV was written by self.attn above;
-                # slice attn_output to one row per request so o_proj and the
-                # rest of the layer only see the live positions.
+                # KV written by self.attn above; slice attn_output so o_proj
+                # and the rest of the layer only run on the live rows.
                 attn_output = attn_output.index_select(0, ctx.gather_ids)
 
         output, _ = self.o_proj(attn_output)
@@ -389,8 +384,7 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
         )
         if ctx.draft_reduce_to_last:
             # self_attn returned [bs, H]; gather residual to match before the
-            # fused allreduce+norm so shapes line up. Everything downstream
-            # (post-norm, MLP, final norm) now runs on [bs, H].
+            # fused allreduce+norm.
             residual = residual.index_select(0, ctx.gather_ids)
 
         # Fused post-attn allreduce + norm (uses attn tp group)
@@ -459,8 +453,7 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
         )
         if ctx.draft_reduce_to_last:
             # self_attn returned [bs, H]; gather residual to match before the
-            # post-attn norm+comm so shapes line up. Everything downstream
-            # (post-norm, MLP, final norm) now runs on [bs, H].
+            # post-attn norm+comm.
             residual = residual.index_select(0, ctx.gather_ids)
         hidden_states, residual = self.comm_manager.post_attn_comm(
             hidden_states, residual, ctx

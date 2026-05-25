@@ -213,12 +213,8 @@ class Eagle(BaseDrafter):
             draft_input, bs, draft_input.input_num_tokens
         )
 
-        # Catch-up step with multi-token decode input: every position except
-        # the live one per request is purely a KV-cache write. The midlayer
-        # slices Q after KV write via ctx.gather_ids and runs attn/MLP/post-
-        # norms on just the [bs] live positions. Only LlamaForCausalLMEagle3
-        # implements the midlayer slice today; MLA / NextN drafts fall back
-        # to the full path until a follow-up PR adds matching slice code.
+        # Only LlamaForCausalLMEagle3 implements the midlayer slice today; MLA
+        # / NextN draft heads fall back to the standard path.
         draft_reduce_to_last = forward_mode.is_decode() and isinstance(
             self.draft_model_runner.model, LlamaForCausalLMEagle3
         )
