@@ -219,12 +219,13 @@ class Eagle(BaseDrafter):
             self.draft_model_runner.model, LlamaForCausalLMEagle3
         )
 
-        if draft_reduce_to_last:
-            # draft_seq_lens_buf aliases the backend's cache_seqlens_int32 at
-            # valid_cache_len + spec_num_tokens. After Q is sliced to one row
-            # per request, the decode kernel takes seq_lens as the attention
-            # upper bound, so trim by the rejected-draft count to keep the live
-            # query from reading them.
+        if draft_reduce_to_last and self.attn_backend.support_kv_cache_prewrite:
+            # On the prewrite path, Q is sliced to one row per request before
+            # the decode kernel, which takes seq_lens as the attention upper
+            # bound. Trim by the rejected-draft count so the live query does
+            # not read the dead positions. The non-prewrite path runs full
+            # multi-token attention with per-position causal masking, so
+            # seq_lens must stay at valid_cache_len + spec_num_tokens there.
             correction = (self.spec_num_tokens - draft_input.accept_lengths).to(
                 self.draft_seq_lens_buf.dtype
             )
