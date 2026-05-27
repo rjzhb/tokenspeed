@@ -551,7 +551,9 @@ class Eagle3LlamaModel(BaseTransformerModel):
             fuse_embed_reduce=fuse_embed_reduce,
         )
 
-        if midlayer.comm_manager.should_fuse(hidden_states.shape[0]):
+        # Decide on pre-slice token count so this matches the path midlayer
+        # actually took; under draft reduce, hidden_states.shape[0] shrinks.
+        if midlayer.comm_manager.should_fuse(input_ids.shape[0]):
             hidden_states_to_logits, hidden_states_to_aux = hidden_states, residual
         else:
             hidden_states_to_logits, hidden_states_to_aux = self.norm(

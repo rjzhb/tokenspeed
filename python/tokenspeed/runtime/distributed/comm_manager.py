@@ -88,15 +88,17 @@ class CommManager:
 
     def moe_tp_ep_group_scattered_num_tokens(self, ctx: ForwardContext) -> list[int]:
         tp_ep_size = self.mapping.moe.tp_ep_size
-        if ctx.global_num_tokens is not None:
-            # DP path: global_num_tokens has one entry per world rank.
-            # MoE group = tp_ep_size contiguous ranks starting at dp_rank * tp_ep_size.
+        # Under draft first-step reduce, the midlayer pruned activations to bs
+        # rows before pre_moe_comm; MoE collectives must size accordingly.
+        global_counts = (
+            ctx.global_bs if ctx.draft_first_step_reduce else ctx.global_num_tokens
+        )
+        if global_counts is not None:
             start = self.mapping.moe.dp_rank * tp_ep_size
-            return list(ctx.global_num_tokens[start : start + tp_ep_size])
-        # No global_num_tokens (e.g., drafter context or non-DP).
-        # This rank has all input_num_tokens; other ranks in the EP group have 0.
+            return list(global_counts[start : start + tp_ep_size])
+        num_tokens = ctx.bs if ctx.draft_first_step_reduce else ctx.input_num_tokens
         result = [0] * tp_ep_size
-        result[self.mapping.moe.tp_ep_rank] = ctx.input_num_tokens
+        result[self.mapping.moe.tp_ep_rank] = num_tokens
         return result
 
     # ---- Communication patterns ----
