@@ -1157,6 +1157,9 @@ class DeepseekV3DecoderLayer(nn.Module):
                 out_cache_loc=out_cache_loc,
                 comm_manager=self.comm_manager,
             )
+            if ctx.draft_first_step_reduce:
+                # Gather residual to self_attn's [bs, H].
+                residual = residual.index_select(0, ctx.gather_ids)
             hidden_states, residual = self.comm_manager.post_attn_reduce_norm(
                 hidden_states, residual, ctx
             )
