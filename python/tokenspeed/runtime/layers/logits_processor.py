@@ -211,7 +211,7 @@ class LogitsProcessor(nn.Module):
         if not logits_metadata.extend_return_logprob:
             gather_ids = logits_metadata.gather_ids
             # Shapes align iff midlayer already pruned to one row per request
-            # (EAGLE draft first-step reduce). Other paths emit [N, H] with N > bs.
+            # (draft first-step reduce). Other paths emit [N, H] with N > bs.
             if gather_ids is None or gather_ids.shape[0] == hidden_states.shape[0]:
                 pruned_states = hidden_states
                 if aux_hidden_states is not None:

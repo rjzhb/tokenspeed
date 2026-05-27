@@ -50,7 +50,7 @@ class ForwardContext:
     forward_mode: ForwardMode | None
     req_to_page: torch.Tensor | None = None
     capture_hidden_mode: CaptureHiddenMode | None = CaptureHiddenMode.NULL
-    # EAGLE draft head's first step prunes to one live row per request.
+    # Spec decode draft head's first step prunes to one live row per request.
     draft_first_step_reduce: bool = False
 
     # --- dp attention ---
