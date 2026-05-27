@@ -212,11 +212,7 @@ class Eagle(BaseDrafter):
             draft_input, bs, draft_input.input_num_tokens
         )
 
-        # Models declare ``supports_draft_first_step_reduce`` to opt in; MLA /
-        # NextN heads that don't declare it fall back to the standard path.
-        draft_first_step_reduce = forward_mode.is_decode() and getattr(
-            self.draft_model_runner.model, "supports_draft_first_step_reduce", False
-        )
+        draft_first_step_reduce = forward_mode.is_decode()
 
         if draft_first_step_reduce and self.attn_backend.support_kv_cache_prewrite:
             # Prewrite path slices Q to one row per request and uses the decode

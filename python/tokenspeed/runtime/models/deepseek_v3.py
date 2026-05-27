@@ -1835,8 +1835,6 @@ class Eagle3DeepseekV2ForCausalLM(DeepseekV3ForCausalLM):
     concatenated [embeds || hidden_states] as input.
     """
 
-    supports_draft_first_step_reduce = True
-
     def __init__(
         self,
         config: PretrainedConfig,

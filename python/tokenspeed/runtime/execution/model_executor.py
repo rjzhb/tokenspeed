@@ -882,16 +882,9 @@ class ModelExecutor:
         # NCCL collectives. Idle ranks must match those collectives:
         # 1 first-step forward + (spec_num_steps - 1) multi-step decode forwards.
         if self.drafter is not None:
-            # Mirror active ranks: when all non-idle ranks are decoding and the
-            # draft model opts in, the catch-up step sizes collectives from
-            # bs/global_bs instead of bs*spec_num_tokens. Idle ranks must use
-            # the same basis or RSAG/AR shapes diverge.
-            supports_reduce = all_decode_or_idle and getattr(
-                self.drafter.draft_model_runner.model,
-                "supports_draft_first_step_reduce",
-                False,
-            )
             for step_idx in range(self.drafter.spec_num_steps):
+                # Mirror active rank's catch-up step: when all non-idle ranks
+                # are decoding, step 0 sizes collectives from bs/global_bs.
                 draft_ctx = ForwardContext(
                     attn_backend=self.drafter.attn_backend,
                     token_to_kv_pool=self.drafter.token_to_kv_pool,
@@ -903,7 +896,7 @@ class ModelExecutor:
                     global_num_tokens=global_num_tokens,
                     global_bs=global_bs,
                     all_decode_or_idle=all_decode_or_idle,
-                    draft_first_step_reduce=(step_idx == 0 and supports_reduce),
+                    draft_first_step_reduce=(step_idx == 0 and all_decode_or_idle),
                 )
                 self.drafter.draft_model_runner.forward(
                     draft_ctx,
