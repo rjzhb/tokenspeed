@@ -382,9 +382,8 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
             ctx=ctx,
             out_cache_loc=out_cache_loc,
         )
-        if ctx.draft_first_step_reduce:
-            # self_attn returned [bs, H]; gather residual to match before the
-            # fused allreduce+norm.
+        if ctx.draft_first_step_reduce and not ctx.forward_mode.is_idle():
+            # Gather residual to self_attn's [bs, H]; idle has no gather_ids.
             residual = residual.index_select(0, ctx.gather_ids)
 
         # Fused post-attn allreduce + norm (uses attn tp group)
@@ -451,9 +450,8 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
             ctx=ctx,
             out_cache_loc=out_cache_loc,
         )
-        if ctx.draft_first_step_reduce:
-            # self_attn returned [bs, H]; gather residual to match before the
-            # post-attn norm+comm.
+        if ctx.draft_first_step_reduce and not ctx.forward_mode.is_idle():
+            # Gather residual to self_attn's [bs, H]; idle has no gather_ids.
             residual = residual.index_select(0, ctx.gather_ids)
         hidden_states, residual = self.comm_manager.post_attn_comm(
             hidden_states, residual, ctx
