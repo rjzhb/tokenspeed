@@ -45,10 +45,6 @@ from tokenspeed.runtime.configs.qwen3_5_config import (
 from tokenspeed.runtime.distributed.comm_manager import CommManager
 from tokenspeed.runtime.distributed.mapping import Mapping
 from tokenspeed.runtime.execution.context import ForwardContext
-from tokenspeed.runtime.execution.drafter.base import (
-    apply_active_slice,
-    apply_active_slice_post_attn,
-)
 
 # Layers - Attention
 from tokenspeed.runtime.layers.attention.linear.layernorm_gated import (
@@ -93,6 +89,10 @@ from tokenspeed.runtime.moe.distribution_recorder import (
     get_global_expert_distribution_recorder,
 )
 from tokenspeed.runtime.moe.expert_location import ModelConfigForExpertLocation
+from tokenspeed.runtime.spec_decode.helper import (
+    apply_draft_active_row_slice,
+    apply_draft_active_row_slice_post_attn,
+)
 from tokenspeed.runtime.multimodal.embedder import (
     EncoderSpec,
     VisionEmbedder,
@@ -751,7 +751,7 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         if self.attn_output_gate:
             sigmoid_mul(attn_output, gate)
 
-        attn_output = apply_active_slice(attn_output, ctx)
+        attn_output = apply_draft_active_row_slice(attn_output, ctx)
 
         output, _ = self.o_proj(attn_output)
         return output
@@ -780,8 +780,13 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
                 ctx=ctx,
                 out_cache_loc=out_cache_loc,
             )
-            hidden_states, residual = apply_active_slice_post_attn(
+            hidden_states, residual = apply_draft_active_row_slice_post_attn(
                 hidden_states, residual, ctx,
+            )
+            # apply_draft_active_row_slice_post_attn may have mutated ctx's
+            # row counts; recompute scatter sizes so MoE runs at the new bs.
+            num_global_tokens, max_num_tokens_per_gpu = (
+                self.comm_manager.get_num_tokens(ctx)
             )
             hidden_states, residual = self.comm_manager.post_attn_reduce_norm(
                 hidden_states, residual, ctx

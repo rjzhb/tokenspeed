@@ -52,7 +52,7 @@ class ForwardContext:
     capture_hidden_mode: CaptureHiddenMode | None = CaptureHiddenMode.NULL
     # When set, the layer applies an active-row slice and mutates ctx so
     # downstream collectives see the post-slice row count.
-    early_slice: bool = False
+    draft_active_row_slice: bool = False
 
     # --- dp attention ---
     global_num_tokens: list[int] | None = None

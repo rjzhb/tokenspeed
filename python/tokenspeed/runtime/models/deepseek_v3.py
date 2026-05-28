@@ -67,10 +67,6 @@ from tokenspeed.runtime.distributed import Mapping
 from tokenspeed.runtime.distributed.comm_manager import CommManager
 from tokenspeed.runtime.execution.context import ForwardContext
 from tokenspeed.runtime.execution.cuda_graph_wrapper import get_is_capture_mode
-from tokenspeed.runtime.execution.drafter.base import (
-    apply_active_slice,
-    apply_active_slice_post_attn,
-)
 from tokenspeed.runtime.execution.forward_batch_info import ForwardMode
 from tokenspeed.runtime.layers.activation import SiluAndMul
 from tokenspeed.runtime.layers.attention.mla_fp8_utils import (
@@ -108,6 +104,10 @@ from tokenspeed.runtime.moe.distribution_recorder import (
     get_global_expert_distribution_recorder,
 )
 from tokenspeed.runtime.moe.expert_location import ModelConfigForExpertLocation
+from tokenspeed.runtime.spec_decode.helper import (
+    apply_draft_active_row_slice,
+    apply_draft_active_row_slice_post_attn,
+)
 from tokenspeed.runtime.utils import LazyValue, add_prefix, get_colorful_logger
 from tokenspeed.runtime.utils.cuda_stream import StreamFork
 from tokenspeed.runtime.utils.env import envs, global_server_args_dict
@@ -679,7 +679,7 @@ class DeepseekV3AttentionMLA(nn.Module):
                 attn_output[num_prefill_tokens:],
             )
 
-        attn_output = apply_active_slice(attn_output, ctx)
+        attn_output = apply_draft_active_row_slice(attn_output, ctx)
         output, _ = self.o_proj(attn_output)
         return output
 
@@ -1158,8 +1158,13 @@ class DeepseekV3DecoderLayer(nn.Module):
                 out_cache_loc=out_cache_loc,
                 comm_manager=self.comm_manager,
             )
-            hidden_states, residual = apply_active_slice_post_attn(
+            hidden_states, residual = apply_draft_active_row_slice_post_attn(
                 hidden_states, residual, ctx,
+            )
+            # apply_draft_active_row_slice_post_attn may have mutated ctx's
+            # row counts; recompute scatter sizes so MoE runs at the new bs.
+            num_global_tokens, max_num_tokens_per_gpu = (
+                self.comm_manager.get_num_tokens(ctx)
             )
             hidden_states, residual = self.comm_manager.post_attn_reduce_norm(
                 hidden_states, residual, ctx
@@ -1705,7 +1710,7 @@ class Eagle3MlaDecoderLayer(nn.Module):
                 comm_manager=self.comm_manager,
             )
 
-            hidden_states, residual = apply_active_slice_post_attn(
+            hidden_states, residual = apply_draft_active_row_slice_post_attn(
                 hidden_states, residual, ctx,
             )
             hidden_states, residual = self.comm_manager.post_attn_reduce_norm(

@@ -35,10 +35,6 @@ from transformers import LlamaConfig
 from tokenspeed.runtime.configs.utils import get_rope_theta
 from tokenspeed.runtime.distributed.mapping import Mapping
 from tokenspeed.runtime.execution.context import ForwardContext
-from tokenspeed.runtime.execution.drafter.base import (
-    apply_active_slice,
-    apply_active_slice_post_attn,
-)
 from tokenspeed.runtime.execution.forward_batch_info import ForwardMode
 from tokenspeed.runtime.layers.activation import SiluAndMul
 from tokenspeed.runtime.layers.common import concat
@@ -50,6 +46,10 @@ from tokenspeed.runtime.layers.linear import (
 )
 from tokenspeed.runtime.layers.paged_attention import PagedAttention
 from tokenspeed.runtime.layers.quantization.base_config import QuantizationConfig
+from tokenspeed.runtime.spec_decode.helper import (
+    apply_draft_active_row_slice,
+    apply_draft_active_row_slice_post_attn,
+)
 from tokenspeed.runtime.layers.rotary_embedding import get_rope
 from tokenspeed.runtime.layers.vocab_parallel_embedding import ParallelLMHead
 from tokenspeed.runtime.model_loader.weight_utils import default_weight_loader
@@ -196,7 +196,7 @@ class LlamaAttention(nn.Module):
         else:
             q, k = self.rotary_emb(positions, q, k)
             attn_output = self.attn(q, k, v, ctx=ctx, out_cache_loc=out_cache_loc)
-            attn_output = apply_active_slice(attn_output, ctx)
+            attn_output = apply_draft_active_row_slice(attn_output, ctx)
 
         output, _ = self.o_proj(attn_output)
         return output
@@ -209,12 +209,12 @@ class LlamaAttention(nn.Module):
     ) -> torch.Tensor:
         """KV is already pre-written via fused_set_kv_buffer_arg before this call.
 
-        Under ``ctx.early_slice``: slice Q to one query per request and route
-        through the decode kernel (catch-up step Optimization B for prewrite
-        backends). Otherwise: standard extend kernel; layer-level
-        ``apply_active_slice_post_attn`` handles slicing afterwards.
+        Under ``ctx.draft_active_row_slice``: slice Q to one query per request
+        and route through the decode kernel (catch-up step Optimization B for
+        prewrite backends). Otherwise: standard extend kernel; layer-level
+        ``apply_draft_active_row_slice_post_attn`` handles slicing afterwards.
         """
-        if not ctx.early_slice:
+        if not ctx.draft_active_row_slice or ctx.gather_ids is None:
             return self.attn(
                 q_rope, None, None,
                 save_kv_cache=False, ctx=ctx, out_cache_loc=out_cache_loc,
@@ -393,7 +393,7 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
             ctx=ctx,
             out_cache_loc=out_cache_loc,
         )
-        hidden_states, residual = apply_active_slice_post_attn(
+        hidden_states, residual = apply_draft_active_row_slice_post_attn(
             hidden_states, residual, ctx,
         )
 
@@ -461,7 +461,7 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
             ctx=ctx,
             out_cache_loc=out_cache_loc,
         )
-        hidden_states, residual = apply_active_slice_post_attn(
+        hidden_states, residual = apply_draft_active_row_slice_post_attn(
             hidden_states, residual, ctx,
         )
         hidden_states, residual = self.comm_manager.post_attn_comm(
