@@ -209,33 +209,37 @@ class LlamaAttention(nn.Module):
     ) -> torch.Tensor:
         """KV is already pre-written via fused_set_kv_buffer_arg before this call.
 
-        Under decode catch-up step (``forward_mode.is_decode()`` +
-        ``draft_active_row_slice``): slice Q to one query per request and route
-        through the decode kernel (Optimization B for prewrite backends).
-        Other modes (EXTEND/MIXED prefill, idle): standard extend kernel;
-        ``apply_draft_active_row_slice_post_attn`` handles layer-level slicing.
+        Decode catch-up (``forward_mode.is_decode()`` + ``draft_active_row_slice``
+        + ``gather_ids`` set): slice Q to one query per request and route through
+        the decode kernel (Optimization B for prewrite backends); output is
+        already bs rows.
+
+        All other paths (EXTEND/MIXED prefill, idle, no-spec): run the standard
+        extend kernel, then slice attn_output so o_proj and the layer-level
+        ``apply_draft_active_row_slice_post_attn`` see bs rows.
         """
         if (
-            not ctx.draft_active_row_slice
-            or ctx.gather_ids is None
-            or not ctx.forward_mode.is_decode()
+            ctx.draft_active_row_slice
+            and ctx.gather_ids is not None
+            and ctx.forward_mode.is_decode()
         ):
-            return self.attn(
-                q_rope, None, None,
-                save_kv_cache=False, ctx=ctx, out_cache_loc=out_cache_loc,
+            q_rope = q_rope.index_select(0, ctx.gather_ids)
+            return ctx.attn_backend.forward(
+                q_rope,
+                None,
+                None,
+                self.attn,
+                out_cache_loc,
+                ctx.token_to_kv_pool,
+                ForwardMode.DECODE,
+                ctx.bs,
+                save_kv_cache=False,
             )
-        q_rope = q_rope.index_select(0, ctx.gather_ids)
-        return ctx.attn_backend.forward(
-            q_rope,
-            None,
-            None,
-            self.attn,
-            out_cache_loc,
-            ctx.token_to_kv_pool,
-            ForwardMode.DECODE,
-            ctx.bs,
-            save_kv_cache=False,
+        attn_output = self.attn(
+            q_rope, None, None,
+            save_kv_cache=False, ctx=ctx, out_cache_loc=out_cache_loc,
         )
+        return apply_draft_active_row_slice_pre_oproj(attn_output, ctx)
 
 
 # ---------------------------------------------------------------------------

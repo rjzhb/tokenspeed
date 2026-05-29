@@ -891,8 +891,10 @@ class ModelExecutor:
         # 1 first-step forward + (spec_num_steps - 1) multi-step decode forwards.
         if self.drafter is not None:
             for step_idx in range(self.drafter.spec_num_steps):
-                # Mirror active rank's catch-up step: when all non-idle ranks
-                # are decoding, step 0 sizes collectives from bs/global_bs.
+                # Mirror active rank: drafter._run_first_step always sets
+                # draft_active_row_slice=True regardless of mode. Idle must
+                # match unconditionally for step 0 so cross-rank MoE/RSAG
+                # sizes agree under EXTEND/MIXED prefill too.
                 draft_ctx = ForwardContext(
                     attn_backend=self.drafter.attn_backend,
                     token_to_kv_pool=self.drafter.token_to_kv_pool,
@@ -904,7 +906,7 @@ class ModelExecutor:
                     global_num_tokens=global_num_tokens,
                     global_bs=global_bs,
                     all_decode_or_idle=all_decode_or_idle,
-                    draft_active_row_slice=(step_idx == 0 and all_decode_or_idle),
+                    draft_active_row_slice=(step_idx == 0),
                 )
                 self.drafter.draft_model_runner.forward(
                     draft_ctx,
