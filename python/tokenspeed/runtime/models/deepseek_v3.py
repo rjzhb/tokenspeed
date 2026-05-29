@@ -105,8 +105,8 @@ from tokenspeed.runtime.moe.distribution_recorder import (
 )
 from tokenspeed.runtime.moe.expert_location import ModelConfigForExpertLocation
 from tokenspeed.runtime.spec_decode.helper import (
-    apply_draft_active_row_slice,
     apply_draft_active_row_slice_post_attn,
+    apply_draft_active_row_slice_pre_oproj,
 )
 from tokenspeed.runtime.utils import LazyValue, add_prefix, get_colorful_logger
 from tokenspeed.runtime.utils.cuda_stream import StreamFork
@@ -679,7 +679,7 @@ class DeepseekV3AttentionMLA(nn.Module):
                 attn_output[num_prefill_tokens:],
             )
 
-        attn_output = apply_draft_active_row_slice(attn_output, ctx)
+        attn_output = apply_draft_active_row_slice_pre_oproj(attn_output, ctx)
         output, _ = self.o_proj(attn_output)
         return output
 

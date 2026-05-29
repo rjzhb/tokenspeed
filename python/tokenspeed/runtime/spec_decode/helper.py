@@ -18,7 +18,23 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Speculative decoding helpers."""
+"""Speculative decoding helpers for the draft head's first-step active-row slice.
+
+The draft head emits a hidden state for every input token but downstream only
+consumes the per-request last token (lm_head + next draft step). These helpers
+drop the dead-position rows so MLP / norm / collective ops only touch live
+rows.
+
+Usage in a single layer:
+
+    attn_output = self.attn(...)
+    attn_output = apply_draft_active_row_slice_pre_oproj(attn_output, ctx)    # before o_proj
+    output = self.o_proj(attn_output)
+    ...
+    hidden_states, residual = apply_draft_active_row_slice_post_attn(
+        hidden_states, residual, ctx,
+    )                                                                # once per layer
+"""
 
 from __future__ import annotations
 
@@ -27,14 +43,10 @@ import torch
 from tokenspeed.runtime.execution.context import ForwardContext
 
 
-def apply_draft_active_row_slice(
+def apply_draft_active_row_slice_pre_oproj(
     tensor: torch.Tensor, ctx: ForwardContext
 ) -> torch.Tensor:
-    """Drop dead-position rows when drafter requested the slice; no-op otherwise.
-
-    Called inside attention modules just before ``o_proj`` so ``o_proj`` only
-    runs on live rows. Idle ranks have ``gather_ids=None`` and pass through.
-    """
+    """Gather ``tensor`` to one row per request; no-op if not requested or idle."""
     if not ctx.draft_active_row_slice or ctx.gather_ids is None:
         return tensor
     return tensor.index_select(0, ctx.gather_ids)
@@ -47,30 +59,33 @@ def apply_draft_active_row_slice_post_attn(
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Finalize the active-row slice after the layer's self-attention.
 
-    Active ranks: attn already sliced its output via ``apply_draft_active_row_slice``;
-    here we gather residual to match and update ``input_num_tokens``.
+    Active rank: gather ``residual`` to match the already-sliced ``attn_output``
+    and update ``ctx.input_num_tokens``.
 
-    Idle ranks (``gather_ids is None``): tensors are empty already, but we
-    still switch ``global_num_tokens`` to ``global_bs`` so downstream MoE
-    collectives see cross-rank-consistent scatter sizes (active ranks switch
-    here too — DP ranks must agree).
-
-    Both: clear ``gather_ids`` / ``draft_active_row_slice`` so downstream
+    All ranks (active + idle): switch ``ctx.global_num_tokens`` to
+    ``ctx.global_bs`` so cross-rank MoE / RSAG see consistent scatter sizes,
+    then clear ``gather_ids`` / ``draft_active_row_slice`` so downstream
     layernorms, MLP, and final-norm don't double-slice.
     """
     if not ctx.draft_active_row_slice:
         return hidden_states, residual
+
+    # Active rank: attn module already sliced its output via
+    # apply_draft_active_row_slice_pre_oproj; line up residual + per-rank token count.
     gather_ids = ctx.gather_ids
     if gather_ids is not None:
         assert hidden_states.size(0) == gather_ids.size(0), (
-            "attention module must call apply_draft_active_row_slice before "
-            "apply_draft_active_row_slice_post_attn"
+            "attn module must call apply_draft_active_row_slice_pre_oproj before this"
         )
         if residual is not None and residual.size(0) != gather_ids.size(0):
             residual = residual.index_select(0, gather_ids)
         ctx.input_num_tokens = gather_ids.size(0)
+
+    # All ranks: switch DP-global counts so collectives agree across the world,
+    # then clear flags so the layer state is coherent for downstream ops.
     if ctx.global_bs is not None:
         ctx.global_num_tokens = ctx.global_bs
     ctx.gather_ids = None
     ctx.draft_active_row_slice = False
+
     return hidden_states, residual

@@ -46,10 +46,6 @@ from tokenspeed.runtime.layers.linear import (
 )
 from tokenspeed.runtime.layers.paged_attention import PagedAttention
 from tokenspeed.runtime.layers.quantization.base_config import QuantizationConfig
-from tokenspeed.runtime.spec_decode.helper import (
-    apply_draft_active_row_slice,
-    apply_draft_active_row_slice_post_attn,
-)
 from tokenspeed.runtime.layers.rotary_embedding import get_rope
 from tokenspeed.runtime.layers.vocab_parallel_embedding import ParallelLMHead
 from tokenspeed.runtime.model_loader.weight_utils import default_weight_loader
@@ -59,6 +55,10 @@ from tokenspeed.runtime.models.base import (
     BaseTransformerModel,
 )
 from tokenspeed.runtime.models.utils import create_fused_set_kv_buffer_arg
+from tokenspeed.runtime.spec_decode.helper import (
+    apply_draft_active_row_slice_post_attn,
+    apply_draft_active_row_slice_pre_oproj,
+)
 from tokenspeed.runtime.utils import add_prefix, get_colorful_logger
 from tokenspeed.runtime.utils.pdl import pdl_enabled
 
@@ -196,7 +196,7 @@ class LlamaAttention(nn.Module):
         else:
             q, k = self.rotary_emb(positions, q, k)
             attn_output = self.attn(q, k, v, ctx=ctx, out_cache_loc=out_cache_loc)
-            attn_output = apply_draft_active_row_slice(attn_output, ctx)
+            attn_output = apply_draft_active_row_slice_pre_oproj(attn_output, ctx)
 
         output, _ = self.o_proj(attn_output)
         return output
