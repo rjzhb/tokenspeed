@@ -220,11 +220,10 @@ class Eagle(BaseDrafter):
         )
         input_ids = maybe_substitute_mm_pad(input_ids, self.mm_pad_substitute_id)
 
-        draft_active_row_slice = forward_mode.is_decode()
-
-        if draft_active_row_slice and self.attn_backend.support_kv_cache_prewrite:
-            # Trim seq_lens by rejected-draft count so the sliced decode
-            # query does not attend to dead positions.
+        # Decode catch-up needs seq_lens trim (prefill has no accept_lengths
+        # analogue). Active-row slice itself fires for all non-idle modes
+        # (EXTEND/MIXED/DECODE); idle ranks skip this path entirely.
+        if forward_mode.is_decode() and self.attn_backend.support_kv_cache_prewrite:
             correction = (self.spec_num_tokens - draft_input.accept_lengths).to(
                 self.draft_seq_lens_buf.dtype
             )
@@ -243,7 +242,7 @@ class Eagle(BaseDrafter):
             global_num_tokens=draft_input.global_num_tokens,
             global_bs=draft_input.global_bs,
             all_decode_or_idle=draft_input.all_decode_or_idle,
-            draft_active_row_slice=draft_active_row_slice,
+            draft_active_row_slice=True,
         )
 
         return self.draft_model_runner.forward(

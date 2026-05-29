@@ -209,12 +209,17 @@ class LlamaAttention(nn.Module):
     ) -> torch.Tensor:
         """KV is already pre-written via fused_set_kv_buffer_arg before this call.
 
-        Under ``ctx.draft_active_row_slice``: slice Q to one query per request
-        and route through the decode kernel (catch-up step Optimization B for
-        prewrite backends). Otherwise: standard extend kernel; layer-level
-        ``apply_draft_active_row_slice_post_attn`` handles slicing afterwards.
+        Under decode catch-up step (``forward_mode.is_decode()`` +
+        ``draft_active_row_slice``): slice Q to one query per request and route
+        through the decode kernel (Optimization B for prewrite backends).
+        Other modes (EXTEND/MIXED prefill, idle): standard extend kernel;
+        ``apply_draft_active_row_slice_post_attn`` handles layer-level slicing.
         """
-        if not ctx.draft_active_row_slice or ctx.gather_ids is None:
+        if (
+            not ctx.draft_active_row_slice
+            or ctx.gather_ids is None
+            or not ctx.forward_mode.is_decode()
+        ):
             return self.attn(
                 q_rope, None, None,
                 save_kv_cache=False, ctx=ctx, out_cache_loc=out_cache_loc,
