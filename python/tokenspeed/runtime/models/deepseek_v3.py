@@ -1143,10 +1143,6 @@ class DeepseekV3DecoderLayer(nn.Module):
         residual: torch.Tensor | None,
     ) -> torch.Tensor:
 
-        num_global_tokens, max_num_tokens_per_gpu = self.comm_manager.get_num_tokens(
-            ctx
-        )
-
         if not ctx.forward_mode.is_idle():
             hidden_states, residual = self.comm_manager.input_reduce_norm(
                 hidden_states, residual
@@ -1158,32 +1154,26 @@ class DeepseekV3DecoderLayer(nn.Module):
                 out_cache_loc=out_cache_loc,
                 comm_manager=self.comm_manager,
             )
-            hidden_states, residual, ctx = apply_draft_active_row_slice_post_attn(
-                hidden_states, residual, ctx,
-            )
-            # apply_draft_active_row_slice_post_attn may have mutated ctx's
-            # row counts; recompute scatter sizes so MoE runs at the new bs.
-            num_global_tokens, max_num_tokens_per_gpu = (
-                self.comm_manager.get_num_tokens(ctx)
-            )
+
+        hidden_states, residual, ctx = apply_draft_active_row_slice_post_attn(
+            hidden_states, residual, ctx,
+        )
+        num_global_tokens, max_num_tokens_per_gpu = self.comm_manager.get_num_tokens(
+            ctx
+        )
+
+        if not ctx.forward_mode.is_idle():
             hidden_states, residual = self.comm_manager.post_attn_reduce_norm(
                 hidden_states, residual, ctx
             )
-            hidden_states = self.forward_mlp(
-                hidden_states,
-                residual,
-                ctx,
-                num_global_tokens,
-                max_num_tokens_per_gpu,
-            )
-        else:
-            hidden_states = self.forward_mlp(
-                hidden_states,
-                residual,
-                ctx,
-                num_global_tokens,
-                max_num_tokens_per_gpu,
-            )
+
+        hidden_states = self.forward_mlp(
+            hidden_states,
+            residual,
+            ctx,
+            num_global_tokens,
+            max_num_tokens_per_gpu,
+        )
         return hidden_states, residual
 
     def input_layer_norm_fn(self, hidden_states, residual):
@@ -1710,9 +1700,11 @@ class Eagle3MlaDecoderLayer(nn.Module):
                 comm_manager=self.comm_manager,
             )
 
-            hidden_states, residual, ctx = apply_draft_active_row_slice_post_attn(
-                hidden_states, residual, ctx,
-            )
+        hidden_states, residual, ctx = apply_draft_active_row_slice_post_attn(
+            hidden_states, residual, ctx,
+        )
+
+        if not ctx.forward_mode.is_idle():
             hidden_states, residual = self.comm_manager.post_attn_reduce_norm(
                 hidden_states, residual, ctx
             )
