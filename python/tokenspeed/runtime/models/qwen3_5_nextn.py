@@ -74,6 +74,7 @@ class Qwen3_5ForConditionalGenerationNextN(nn.Module):
         self.pre_fc_norm_hidden = RMSNorm_cls(config.hidden_size, config.rms_norm_eps)
         config.num_hidden_layers = 1
         config.full_attention_interval = 1
+        self.num_layers = config.num_hidden_layers
         self.model = Qwen3_5ForCausalLM(
             config,
             mapping=self.mapping,

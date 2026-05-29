@@ -748,7 +748,11 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         if self.attn_output_gate:
             sigmoid_mul(attn_output, gate)
 
-        attn_output = DraftSliceAttnWrapper.pre_oproj(attn_output, ctx)
+        attn_output = DraftSliceAttnWrapper.pre_oproj(
+            attn_output,
+            ctx,
+            self.layer_id,
+        )
 
         output, _ = self.o_proj(attn_output)
         return output
@@ -782,6 +786,7 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
             hidden_states,
             residual,
             ctx,
+            self.layer_id,
         )
         num_global_tokens, max_num_tokens_per_gpu = self.comm_manager.get_num_tokens(
             ctx

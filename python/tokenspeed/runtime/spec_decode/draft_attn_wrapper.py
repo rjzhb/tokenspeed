@@ -59,8 +59,8 @@ class DraftSliceAttnWrapper(nn.Module):
             return getattr(inner, name)
 
     @staticmethod
-    def _active(ctx: ForwardContext) -> bool:
-        return ctx.draft_active_row_slice and ctx.gather_ids is not None
+    def is_active(ctx: ForwardContext, layer_id: int) -> bool:
+        return ctx.draft_slice_layer_id == layer_id and ctx.gather_ids is not None
 
     def forward(
         self,
@@ -72,7 +72,7 @@ class DraftSliceAttnWrapper(nn.Module):
         save_kv_cache: bool = True,
         **kwargs,
     ) -> torch.Tensor:
-        active = self._active(ctx)
+        active = self.is_active(ctx, self.inner.layer_id)
 
         # Decode catch-up with prewritten KV: slice Q to bs rows and dispatch
         # to the decode kernel directly — the standard kernel would otherwise
@@ -106,9 +106,13 @@ class DraftSliceAttnWrapper(nn.Module):
         return attn_output
 
     @staticmethod
-    def pre_oproj(tensor: torch.Tensor, ctx: ForwardContext) -> torch.Tensor:
-        """Gather to one row per request; no-op if not active."""
-        if not DraftSliceAttnWrapper._active(ctx):
+    def pre_oproj(
+        tensor: torch.Tensor,
+        ctx: ForwardContext,
+        layer_id: int,
+    ) -> torch.Tensor:
+        """Gather to one row per request; no-op if not on last draft layer."""
+        if not DraftSliceAttnWrapper.is_active(ctx, layer_id):
             return tensor
         return tensor.index_select(0, ctx.gather_ids)
 
@@ -117,6 +121,7 @@ class DraftSliceAttnWrapper(nn.Module):
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
         ctx: ForwardContext,
+        layer_id: int,
     ) -> tuple[torch.Tensor, torch.Tensor | None, ForwardContext]:
         """Layer-level finalize after self-attention.
 
@@ -128,7 +133,7 @@ class DraftSliceAttnWrapper(nn.Module):
         Returned ctx is the same object — callers must rebind so the
         mutation is visible at the call site.
         """
-        if not ctx.draft_active_row_slice:
+        if ctx.draft_slice_layer_id != layer_id:
             return hidden_states, residual, ctx
 
         gather_ids = ctx.gather_ids
@@ -145,7 +150,7 @@ class DraftSliceAttnWrapper(nn.Module):
             gather_ids,
         )
         ctx.gather_ids = None
-        ctx.draft_active_row_slice = False
+        ctx.draft_slice_layer_id = None
 
         return hidden_states, residual, ctx
 

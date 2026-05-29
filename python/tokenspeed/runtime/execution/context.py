@@ -50,9 +50,10 @@ class ForwardContext:
     forward_mode: ForwardMode | None
     req_to_page: torch.Tensor | None = None
     capture_hidden_mode: CaptureHiddenMode | None = CaptureHiddenMode.NULL
-    # When set, the layer applies an active-row slice and mutates ctx so
-    # downstream collectives see the post-slice row count.
-    draft_active_row_slice: bool = False
+    # Set to the draft model's last layer id to enable the active-row slice
+    # on that layer: it mutates ctx so downstream collectives see the
+    # post-slice row count. ``None`` disables the slice.
+    draft_slice_layer_id: int | None = None
 
     # --- dp attention ---
     global_num_tokens: list[int] | None = None

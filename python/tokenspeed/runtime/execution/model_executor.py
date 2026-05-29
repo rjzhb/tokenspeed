@@ -890,9 +890,15 @@ class ModelExecutor:
         # NCCL collectives. Idle ranks must match those collectives:
         # 1 first-step forward + (spec_num_steps - 1) multi-step decode forwards.
         if self.drafter is not None:
+            draft_model = self.drafter.draft_model_runner.model
+            draft_slice_layer_id = (
+                draft_model.num_layers - 1
+                if "num_layers" in vars(draft_model)
+                else None
+            )
             for step_idx in range(self.drafter.spec_num_steps):
-                # Mirror active rank: drafter._run_first_step always sets
-                # draft_active_row_slice=True regardless of mode. Idle must
+                # Mirror active rank: drafter._run_first_step sets
+                # draft_slice_layer_id on step 0 regardless of mode. Idle must
                 # match unconditionally for step 0 so cross-rank MoE/RSAG
                 # sizes agree under EXTEND/MIXED prefill too.
                 draft_ctx = ForwardContext(
@@ -906,7 +912,9 @@ class ModelExecutor:
                     global_num_tokens=global_num_tokens,
                     global_bs=global_bs,
                     all_decode_or_idle=all_decode_or_idle,
-                    draft_active_row_slice=(step_idx == 0),
+                    draft_slice_layer_id=(
+                        draft_slice_layer_id if step_idx == 0 else None
+                    ),
                 )
                 self.drafter.draft_model_runner.forward(
                     draft_ctx,

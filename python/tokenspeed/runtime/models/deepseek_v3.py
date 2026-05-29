@@ -676,7 +676,11 @@ class DeepseekV3AttentionMLA(nn.Module):
                 attn_output[num_prefill_tokens:],
             )
 
-        attn_output = DraftSliceAttnWrapper.pre_oproj(attn_output, ctx)
+        attn_output = DraftSliceAttnWrapper.pre_oproj(
+            attn_output,
+            ctx,
+            self.layer_id,
+        )
         output, _ = self.o_proj(attn_output)
         return output
 
@@ -1156,6 +1160,7 @@ class DeepseekV3DecoderLayer(nn.Module):
             hidden_states,
             residual,
             ctx,
+            self.layer_id,
         )
         num_global_tokens, max_num_tokens_per_gpu = self.comm_manager.get_num_tokens(
             ctx
@@ -1703,6 +1708,7 @@ class Eagle3MlaDecoderLayer(nn.Module):
             hidden_states,
             residual,
             ctx,
+            self.layer_id,
         )
 
         if not ctx.forward_mode.is_idle():
@@ -1848,6 +1854,7 @@ class Eagle3DeepseekV2ForCausalLM(DeepseekV3ForCausalLM):
         if self.config.num_hidden_layers != 1:
             raise ValueError("Eagle3 MLA drafter currently only supports 1 layer")
 
+        self.num_layers = config.num_hidden_layers
         self.model = Eagle3MlaModel(
             config,
             mapping=self.mapping,

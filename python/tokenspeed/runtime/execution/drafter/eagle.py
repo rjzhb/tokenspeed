@@ -228,9 +228,14 @@ class Eagle(BaseDrafter):
         if num_decodes > 0 and self.attn_backend.support_kv_cache_prewrite():
             correction = (
                 self.spec_num_tokens
-                - draft_input.accept_lengths[draft_input.num_extends:]
+                - draft_input.accept_lengths[draft_input.num_extends :]
             ).to(self.draft_seq_lens_buf.dtype)
-            self.draft_seq_lens_buf[draft_input.num_extends:bs].sub_(correction)
+            self.draft_seq_lens_buf[draft_input.num_extends : bs].sub_(correction)
+
+        # Draft models opt in by declaring ``num_layers`` (instance attr).
+        # No declaration → disable the active-row slice (None).
+        model = self.draft_model_runner.model
+        slice_layer_id = model.num_layers - 1 if "num_layers" in vars(model) else None
 
         ctx = ForwardContext(
             attn_backend=self.attn_backend,
@@ -245,7 +250,7 @@ class Eagle(BaseDrafter):
             global_num_tokens=draft_input.global_num_tokens,
             global_bs=draft_input.global_bs,
             all_decode_or_idle=draft_input.all_decode_or_idle,
-            draft_active_row_slice=True,
+            draft_slice_layer_id=slice_layer_id,
         )
 
         return self.draft_model_runner.forward(

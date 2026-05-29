@@ -368,6 +368,7 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
             hidden_states,
             residual,
             ctx,
+            self.layer_id,
         )
 
         # Fused post-attn allreduce + norm (uses attn tp group)
@@ -438,6 +439,7 @@ class Eagle3DecoderLayer(BaseDecoderLayer):
             hidden_states,
             residual,
             ctx,
+            self.layer_id,
         )
         hidden_states, residual = self.comm_manager.post_attn_comm(
             hidden_states, residual, ctx
@@ -575,6 +577,7 @@ class LlamaForCausalLMEagle3(BaseCausalLM):
         if self.config.num_hidden_layers != 1:
             raise ValueError("EAGLE3 currently only supports 1 layer")
 
+        self.num_layers = config.num_hidden_layers
         self.model = self.resolve_model(config, mapping, quant_config, prefix)
 
         self.load_lm_head_from_target = False

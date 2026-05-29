@@ -180,6 +180,7 @@ class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
             quant_config = None
 
         self.quant_config = quant_config
+        self.num_layers = config.num_nextn_predict_layers
 
         self.model = DeepseekModelNextN(
             config, mapping=self.mapping, quant_config=quant_config
