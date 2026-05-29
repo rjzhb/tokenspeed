@@ -220,14 +220,17 @@ class Eagle(BaseDrafter):
         )
         input_ids = maybe_substitute_mm_pad(input_ids, self.mm_pad_substitute_id)
 
-        # Decode catch-up needs seq_lens trim (prefill has no accept_lengths
-        # analogue). Active-row slice itself fires for all non-idle modes
-        # (EXTEND/MIXED/DECODE); idle ranks skip this path entirely.
-        if forward_mode.is_decode() and self.attn_backend.support_kv_cache_prewrite:
-            correction = (self.spec_num_tokens - draft_input.accept_lengths).to(
-                self.draft_seq_lens_buf.dtype
-            )
-            self.draft_seq_lens_buf[:bs].sub_(correction)
+        # Trim seq_lens for decode rows (catch-up step) by rejected-draft count
+        # so the sliced decode query does not attend to dead positions. Applies
+        # to both pure DECODE and the decode slice of a MIXED batch; prefill
+        # rows have no accept_lengths semantics and are left alone.
+        num_decodes = bs - draft_input.num_extends
+        if num_decodes > 0 and self.attn_backend.support_kv_cache_prewrite:
+            correction = (
+                self.spec_num_tokens
+                - draft_input.accept_lengths[draft_input.num_extends:]
+            ).to(self.draft_seq_lens_buf.dtype)
+            self.draft_seq_lens_buf[draft_input.num_extends:bs].sub_(correction)
 
         ctx = ForwardContext(
             attn_backend=self.attn_backend,
