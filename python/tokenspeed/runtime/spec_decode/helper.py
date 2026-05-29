@@ -81,10 +81,21 @@ def apply_draft_active_row_slice_post_attn(
             residual = residual.index_select(0, gather_ids)
         ctx.input_num_tokens = gather_ids.size(0)
 
-    # All ranks: switch DP-global counts so collectives agree across the world,
-    # then clear flags so the layer state is coherent for downstream ops.
+    # All ranks: switch DP-global counts so collectives agree across the world.
+    #   1. global_bs set (production event-loop path): source of truth.
+    #   2. global_bs unset + active rank (cuda_graph_wrapper capture path):
+    #      fall back to broadcasting local bs — capture assumes uniform batch.
+    #   3. global_bs unset + idle rank: can't infer the post-slice batch size
+    #      from this rank alone; clear global_num_tokens so downstream collective
+    #      sizing degrades to the non-DP path instead of using stale capture
+    #      totals.
     if ctx.global_bs is not None:
         ctx.global_num_tokens = ctx.global_bs
+    elif ctx.global_num_tokens is not None:
+        if gather_ids is not None:
+            ctx.global_num_tokens = [gather_ids.size(0)] * len(ctx.global_num_tokens)
+        else:
+            ctx.global_num_tokens = None
     ctx.gather_ids = None
     ctx.draft_active_row_slice = False
 
